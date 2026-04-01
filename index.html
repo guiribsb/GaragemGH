@@ -5,698 +5,181 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>AutoGest — Gestão de Veículos</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-
-<!-- Firebase SDK via CDN -->
-<script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
-  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getFirestore, collection, addDoc, updateDoc, deleteDoc,
-  doc, getDocs, query, orderBy }
-  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-
-// ============================================================
-// 🔧 CONFIGURAÇÃO FIREBASE — substitua com seus dados
-// ============================================================
-const firebaseConfig = {
-  apiKey:            "AIzaSyCSPMc1qTqIfmwd0bZjOfyjwvh49_9xxHc",
-  authDomain:        "garagemgh.firebaseapp.com",
-  projectId:         "garagemgh",
-  storageBucket:     "garagemgh.firebasestorage.app",
-  messagingSenderId: "647982487018",
-  appId:             "1:647982487018:web:ae173e09e8e648f6354e93"
-};
-// ============================================================
-
-const app  = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db   = getFirestore(app);
-
-// ── Utilitários ─────────────────────────────────────────────
-const fmt = v => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v);
-const fmtKm = v => new Intl.NumberFormat('pt-BR').format(v) + ' km';
-const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('pt-BR') : '—';
-const $ = id => document.getElementById(id);
-const show = id => $(id).style.display = '';
-const hide = id => $(id).style.display = 'none';
-
-let vehicles = [];
-let currentPage = 'dashboard';
-
-// ── Auth ─────────────────────────────────────────────────────
-onAuthStateChanged(auth, user => {
-  if (user) {
-    hide('screen-login');
-    show('screen-app');
-    $('user-email').textContent = user.email;
-    loadVehicles();
-  } else {
-    show('screen-login');
-    hide('screen-app');
-  }
-});
-
-$('btn-login').addEventListener('click', async () => {
-  const email = $('input-email').value;
-  const pass  = $('input-pass').value;
-  const err   = $('login-error');
-  err.style.display = 'none';
-  $('btn-login').textContent = 'Entrando...';
-  try {
-    await signInWithEmailAndPassword(auth, email, pass);
-  } catch {
-    err.style.display = 'block';
-    $('btn-login').textContent = 'Entrar';
-  }
-});
-
-$('btn-logout').addEventListener('click', () => signOut(auth));
-
-// ── Firestore ─────────────────────────────────────────────────
-async function loadVehicles() {
-  showLoading(true);
-  const q   = query(collection(db,'vehicles'), orderBy('criadoEm','desc'));
-  const snap = await getDocs(q);
-  vehicles  = snap.docs.map(d => ({id:d.id,...d.data()}));
-  renderPage(currentPage);
-  showLoading(false);
-}
-
-async function saveVehicle(data) {
-  await addDoc(collection(db,'vehicles'), {
-    ...data, status:'disponivel', criadoEm: new Date().toISOString()
-  });
-  await loadVehicles();
-}
-
-async function updateVehicle(id, data) {
-  await updateDoc(doc(db,'vehicles',id), data);
-  await loadVehicles();
-}
-
-async function deleteVehicle(id) {
-  await deleteDoc(doc(db,'vehicles',id));
-  await loadVehicles();
-}
-
-// ── Navegação ─────────────────────────────────────────────────
-document.querySelectorAll('[data-nav]').forEach(el => {
-  el.addEventListener('click', () => {
-    currentPage = el.dataset.nav;
-    document.querySelectorAll('[data-nav]').forEach(n => n.classList.remove('active'));
-    el.classList.add('active');
-    renderPage(currentPage);
-    // fecha menu mobile se aberto
-    $('mobile-menu').classList.remove('open');
-  });
-});
-
-$('btn-hamburger').addEventListener('click', () => {
-  $('mobile-menu').classList.toggle('open');
-});
-
-function showLoading(on) {
-  $('loading-bar').style.width = on ? '70%' : '100%';
-  if (!on) setTimeout(()=>$('loading-bar').style.width='0', 300);
-}
-
-function renderPage(page) {
-  $('page-dashboard').style.display = page==='dashboard' ? '' : 'none';
-  $('page-inventario').style.display = page==='inventario' ? '' : 'none';
-  $('page-vendas').style.display = page==='vendas' ? '' : 'none';
-
-  if (page==='dashboard')  renderDashboard();
-  if (page==='inventario') renderInventario();
-  if (page==='vendas')     renderVendas();
-}
-
-// ── Dashboard ─────────────────────────────────────────────────
-function renderDashboard() {
-  const vendidos   = vehicles.filter(v=>v.status==='vendido');
-  const disponiveis = vehicles.filter(v=>v.status==='disponivel');
-  const lucroTotal = vendidos.reduce((a,v)=>a+((v.venda?.valorVenda||0)-v.valorCompra),0);
-  const investido  = disponiveis.reduce((a,v)=>a+v.valorCompra,0);
-
-  $('kpi-lucro').textContent   = fmt(lucroTotal);
-  $('kpi-total').textContent   = vehicles.length;
-  $('kpi-disp').textContent    = disponiveis.length;
-  $('kpi-vendidos').textContent = vendidos.length;
-  $('kpi-investido').textContent = fmt(investido);
-
-  const tbody = $('dash-sales-body');
-  if (!vendidos.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty-row">Nenhuma venda registrada ainda.</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = vendidos.slice(0,6).map(v => {
-    const lucro = (v.venda?.valorVenda||0) - v.valorCompra;
-    return `<tr>
-      <td><strong>${v.marca} ${v.modelo}</strong><br><span class="sub">${v.ano} · ${v.placa}</span></td>
-      <td>${v.venda?.nomeComprador||'—'}</td>
-      <td>${fmt(v.venda?.valorVenda||0)}</td>
-      <td class="${lucro>=0?'profit':'loss'}">${lucro>=0?'+':''}${fmt(lucro)}</td>
-      <td>${fmtDate(v.venda?.dataVenda)}</td>
-    </tr>`;
-  }).join('');
-}
-
-// ── Inventário ─────────────────────────────────────────────────
-function renderInventario(filter='todos', search='') {
-  const filtered = vehicles.filter(v => {
-    const matchS = filter==='todos' || v.status===filter;
-    const matchQ = `${v.marca} ${v.modelo} ${v.placa} ${v.cor}`.toLowerCase().includes(search.toLowerCase());
-    return matchS && matchQ;
-  });
-
-  const tbody = $('inv-body');
-  if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-row">Nenhum veículo encontrado.</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = filtered.map(v => {
-    const isVendido = v.status==='vendido';
-    const actions = isVendido
-      ? `<button class="act-btn del" onclick="confirmDelete('${v.id}')">🗑</button>`
-      : `<button class="act-btn sell" onclick="openSaleModal('${v.id}')">💰</button>
-         <button class="act-btn edit" onclick="openEditModal('${v.id}')">✏️</button>
-         <button class="act-btn del" onclick="confirmDelete('${v.id}')">🗑</button>`;
-    return `<tr>
-      <td><strong>${v.marca} ${v.modelo}</strong><br><span class="sub">${v.ano}</span></td>
-      <td>${v.placa}<br><span class="sub">${v.cor}</span></td>
-      <td>${fmtKm(v.quilometragem)}</td>
-      <td>${fmt(v.valorCompra)}</td>
-      <td>${fmt(v.valorFipe)}</td>
-      <td><span class="badge ${isVendido?'sold':'avail'}">${isVendido?'✓ Vendido':'● Disponível'}</span></td>
-      <td><div class="actions">${actions}</div></td>
-    </tr>`;
-  }).join('');
-}
-
-// Eventos de filtro/busca do inventário
-setTimeout(()=>{
-  $('inv-search')?.addEventListener('input', e => {
-    renderInventario($('inv-filter').value, e.target.value);
-  });
-  $('inv-filter')?.addEventListener('change', e => {
-    renderInventario(e.target.value, $('inv-search').value);
-  });
-},100);
-
-// ── Vendas ─────────────────────────────────────────────────────
-function renderVendas() {
-  const vendidos = vehicles.filter(v=>v.status==='vendido');
-  const lucroTotal   = vendidos.reduce((a,v)=>a+((v.venda?.valorVenda||0)-v.valorCompra),0);
-  const totalFat     = vendidos.reduce((a,v)=>a+(v.venda?.valorVenda||0),0);
-  const totalInvest  = vendidos.reduce((a,v)=>a+v.valorCompra,0);
-
-  $('v-investido').textContent = fmt(totalInvest);
-  $('v-faturado').textContent  = fmt(totalFat);
-  $('v-lucro').textContent     = fmt(lucroTotal);
-  $('v-lucro').className       = lucroTotal>=0 ? 'kpi-val profit' : 'kpi-val loss';
-
-  const tbody = $('vendas-body');
-  if (!vendidos.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="empty-row">Nenhuma venda ainda.</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = vendidos.map(v => {
-    const lucro = (v.venda?.valorVenda||0) - v.valorCompra;
-    const cpf = v.venda?.cpfComprador||'';
-    return `<tr>
-      <td><strong>${v.marca} ${v.modelo}</strong><br><span class="sub">${v.ano} · ${v.placa}</span></td>
-      <td>${v.venda?.nomeComprador||'—'}</td>
-      <td class="mono">${cpf}</td>
-      <td>${fmt(v.valorCompra)}</td>
-      <td>${fmt(v.venda?.valorVenda||0)}</td>
-      <td class="${lucro>=0?'profit':'loss'}">${lucro>=0?'+':''}${fmt(lucro)}</td>
-      <td>${fmtDate(v.venda?.dataVenda)}</td>
-    </tr>`;
-  }).join('');
-}
-
-// ── Modal Veículo ──────────────────────────────────────────────
-let editingId = null;
-
-$('btn-new-vehicle').addEventListener('click', () => {
-  editingId = null;
-  $('vmodal-title').textContent = 'Novo Veículo';
-  $('vform').reset();
-  show('modal-vehicle');
-});
-
-window.openEditModal = id => {
-  const v = vehicles.find(x=>x.id===id);
-  if (!v) return;
-  editingId = id;
-  $('vmodal-title').textContent = 'Editar Veículo';
-  $('vf-marca').value = v.marca;
-  $('vf-modelo').value = v.modelo;
-  $('vf-ano').value = v.ano;
-  $('vf-placa').value = v.placa;
-  $('vf-cor').value = v.cor;
-  $('vf-km').value = v.quilometragem;
-  $('vf-fipe').value = v.valorFipe;
-  $('vf-compra').value = v.valorCompra;
-  $('vf-obs').value = v.observacoes||'';
-  show('modal-vehicle');
-};
-
-$('btn-close-vehicle').addEventListener('click', ()=>hide('modal-vehicle'));
-$('modal-vehicle').addEventListener('click', e=>{ if(e.target===$('modal-vehicle')) hide('modal-vehicle'); });
-
-$('vform').addEventListener('submit', async e => {
-  e.preventDefault();
-  const btn = $('vform-submit');
-  btn.textContent = 'Salvando...'; btn.disabled = true;
-  const data = {
-    marca: $('vf-marca').value, modelo: $('vf-modelo').value,
-    ano: +$('vf-ano').value, placa: $('vf-placa').value,
-    cor: $('vf-cor').value, quilometragem: +$('vf-km').value,
-    valorFipe: +$('vf-fipe').value, valorCompra: +$('vf-compra').value,
-    observacoes: $('vf-obs').value
-  };
-  try {
-    if (editingId) await updateVehicle(editingId, data);
-    else await saveVehicle(data);
-    hide('modal-vehicle');
-  } catch(err) { alert('Erro ao salvar: '+err.message); }
-  btn.textContent = 'Salvar'; btn.disabled = false;
-});
-
-// ── Modal Venda ────────────────────────────────────────────────
-let sellingId = null;
-
-window.openSaleModal = id => {
-  const v = vehicles.find(x=>x.id===id);
-  if (!v) return;
-  sellingId = id;
-  $('smodal-info').innerHTML = `<strong>${v.marca} ${v.modelo} ${v.ano}</strong> · ${v.placa}<br>
-    <span style="color:var(--muted)">Valor de Compra: ${fmt(v.valorCompra)}</span>`;
-  $('sf-valor').value = v.valorFipe;
-  $('sf-data').value = new Date().toISOString().split('T')[0];
-  $('sform').reset();
-  $('sf-valor').value = v.valorFipe;
-  $('sf-data').value = new Date().toISOString().split('T')[0];
-  updateLucroPreview();
-  show('modal-sale');
-};
-
-function updateLucroPreview() {
-  const v = vehicles.find(x=>x.id===sellingId);
-  if (!v) return;
-  const lucro = (+$('sf-valor').value||0) - v.valorCompra;
-  const el = $('lucro-preview');
-  el.textContent = `Lucro estimado: ${fmt(lucro)}`;
-  el.className = 'lucro-preview ' + (lucro>=0?'positive':'negative');
-}
-setTimeout(()=>$('sf-valor')?.addEventListener('input', updateLucroPreview), 200);
-
-$('btn-close-sale').addEventListener('click', ()=>hide('modal-sale'));
-$('modal-sale').addEventListener('click', e=>{ if(e.target===$('modal-sale')) hide('modal-sale'); });
-
-$('sform').addEventListener('submit', async e => {
-  e.preventDefault();
-  const btn = $('sform-submit');
-  btn.textContent = 'Salvando...'; btn.disabled = true;
-  const sale = {
-    nomeComprador: $('sf-nome').value,
-    cpfComprador: $('sf-cpf').value,
-    valorVenda: +$('sf-valor').value,
-    dataVenda: $('sf-data').value
-  };
-  try {
-    await updateVehicle(sellingId, { status:'vendido', venda: sale });
-    hide('modal-sale');
-  } catch(err) { alert('Erro ao registrar venda: '+err.message); }
-  btn.textContent = 'Confirmar Venda'; btn.disabled = false;
-});
-
-// ── Delete ─────────────────────────────────────────────────────
-window.confirmDelete = async id => {
-  const v = vehicles.find(x=>x.id===id);
-  if (!v) return;
-  if (!confirm(`Excluir "${v.marca} ${v.modelo}"? Esta ação não pode ser desfeita.`)) return;
-  await deleteVehicle(id);
-};
-
-</script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
 <style>
-:root {
-  --bg:      #0d1117;
-  --surface: #161b22;
-  --card:    #1c2230;
-  --border:  #2a3547;
-  --accent:  #f0b429;
-  --accent2: #e8a61a;
-  --text:    #e6edf3;
-  --muted:   #7d8fa3;
-  --green:   #3fb950;
-  --red:     #f85149;
-  --blue:    #58a6ff;
-  --font:    'DM Sans', sans-serif;
-  --mono:    'DM Mono', monospace;
-  --radius:  10px;
+:root{
+  --bg:#0d1117;--surface:#161b22;--card:#1c2230;--border:#2a3547;
+  --accent:#f0b429;--accent2:#e8a61a;--text:#e6edf3;--muted:#7d8fa3;
+  --green:#3fb950;--red:#f85149;--blue:#58a6ff;
+  --font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;--radius:10px;
 }
-
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-body {
-  font-family: var(--font);
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  font-size: 14px;
-  line-height: 1.5;
-}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
 
 /* ── Loading bar ── */
-#loading-bar {
-  position: fixed; top: 0; left: 0; height: 2px;
-  background: var(--accent); width: 0;
-  transition: width 0.4s ease, opacity 0.3s;
-  z-index: 9999;
-}
+#loading-bar{position:fixed;top:0;left:0;height:2px;background:var(--accent);width:0;transition:width .4s ease;z-index:9999}
 
-/* ── Login ── */
-#screen-login {
-  min-height: 100vh;
-  display: flex; align-items: center; justify-content: center;
-  padding: 1rem;
-  background: radial-gradient(ellipse at 60% 20%, #1a2235 0%, var(--bg) 70%);
-}
-.login-box {
-  width: 100%; max-width: 400px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 2.5rem;
-}
-.login-logo {
-  display: flex; align-items: center; gap: 10px;
-  margin-bottom: 2rem;
-}
-.login-logo-icon {
-  width: 40px; height: 40px;
-  background: var(--accent);
-  border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 20px;
-}
-.login-logo h1 { font-size: 1.4rem; font-weight: 600; }
-.login-logo p { font-size: 0.78rem; color: var(--muted); }
-.login-box h2 { font-size: 1rem; font-weight: 500; margin-bottom: 1.5rem; }
-.field { margin-bottom: 1rem; }
-.field label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 6px; }
-.field input {
-  width: 100%; background: var(--card); border: 1px solid var(--border);
-  color: var(--text); border-radius: var(--radius);
-  padding: 10px 12px; font-size: 0.88rem; font-family: var(--font);
-  transition: border-color 0.15s;
-}
-.field input:focus { outline: none; border-color: var(--accent); }
-.login-error {
-  display: none;
-  background: #2a1515; border: 1px solid #5a2020;
-  color: var(--red); border-radius: var(--radius);
-  padding: 10px 14px; font-size: 0.82rem; margin-bottom: 1rem;
-}
-.btn-primary {
-  width: 100%; background: var(--accent); color: #0d1117;
-  border: none; border-radius: var(--radius);
-  padding: 11px; font-size: 0.9rem; font-weight: 600;
-  cursor: pointer; font-family: var(--font);
-  transition: background 0.15s, transform 0.1s;
-}
-.btn-primary:hover { background: var(--accent2); }
-.btn-primary:active { transform: scale(0.98); }
+/* ── LOGIN ── */
+#screen-login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem;background:radial-gradient(ellipse at 60% 20%,#1a2235 0%,var(--bg) 70%)}
+.login-box{width:100%;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:2.5rem}
+.login-logo{display:flex;align-items:center;gap:12px;margin-bottom:2rem}
+.login-logo-icon{width:42px;height:42px;background:var(--accent);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.login-logo h1{font-size:1.4rem;font-weight:600;line-height:1.1}
+.login-logo p{font-size:.75rem;color:var(--muted);margin-top:2px}
+.login-box h2{font-size:1rem;font-weight:500;margin-bottom:1.5rem}
+.field{margin-bottom:1rem}
+.field label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:5px}
+.field input{width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:10px 13px;font-size:.88rem;font-family:var(--font);transition:border-color .15s}
+.field input:focus{outline:none;border-color:var(--accent)}
+.login-error{display:none;background:#2a1515;border:1px solid #5a2020;color:var(--red);border-radius:var(--radius);padding:10px 14px;font-size:.82rem;margin-bottom:1rem}
+.btn-primary{width:100%;background:var(--accent);color:#0d1117;border:none;border-radius:var(--radius);padding:11px;font-size:.9rem;font-weight:600;cursor:pointer;font-family:var(--font);transition:background .15s,transform .1s}
+.btn-primary:hover{background:var(--accent2)}
+.btn-primary:active{transform:scale(.98)}
 
-/* ── App shell ── */
-#screen-app { display: none; min-height: 100vh; }
+/* ── APP SHELL ── */
+#screen-app{display:none;min-height:100vh}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100}
+.sidebar-logo{display:flex;align-items:center;gap:10px;padding:20px 18px;border-bottom:1px solid var(--border)}
+.sidebar-logo-icon{width:34px;height:34px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.sidebar-logo-text{font-size:1rem;font-weight:600}
+nav{flex:1;padding:12px 10px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;color:var(--muted);cursor:pointer;font-size:.86rem;margin-bottom:2px;transition:all .15s;border:1px solid transparent;user-select:none}
+.nav-item:hover{color:var(--text);background:var(--card)}
+.nav-item.active{color:var(--accent);background:rgba(240,180,41,.08);border-color:rgba(240,180,41,.15)}
+.sidebar-footer{padding:14px 12px;border-top:1px solid var(--border)}
+#user-email{font-size:.72rem;color:var(--muted);display:block;padding:2px 10px;margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-logout{display:flex;align-items:center;gap:8px;width:100%;padding:8px 12px;border-radius:8px;background:none;border:none;color:var(--muted);font-size:.82rem;cursor:pointer;font-family:var(--font);transition:all .15s;text-align:left}
+.btn-logout:hover{color:var(--red);background:rgba(248,81,73,.08)}
 
-.sidebar {
-  position: fixed; left: 0; top: 0; bottom: 0;
-  width: 220px; background: var(--surface);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  z-index: 100;
-}
-.sidebar-logo {
-  display: flex; align-items: center; gap: 10px;
-  padding: 20px 18px; border-bottom: 1px solid var(--border);
-}
-.sidebar-logo-icon {
-  width: 34px; height: 34px; background: var(--accent);
-  border-radius: 8px; display: flex; align-items: center;
-  justify-content: center; font-size: 16px; flex-shrink: 0;
-}
-.sidebar-logo-text { font-size: 1rem; font-weight: 600; }
-nav { flex: 1; padding: 12px 10px; }
-[data-nav] {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px; border-radius: 8px;
-  color: var(--muted); cursor: pointer; font-size: 0.88rem;
-  margin-bottom: 2px; transition: all 0.15s;
-  border: 1px solid transparent; user-select: none;
-}
-[data-nav]:hover { color: var(--text); background: var(--card); }
-[data-nav].active {
-  color: var(--accent); background: rgba(240,180,41,0.08);
-  border-color: rgba(240,180,41,0.15);
-}
-[data-nav] .nav-icon { font-size: 16px; }
-.sidebar-footer {
-  padding: 14px 12px; border-top: 1px solid var(--border);
-}
-.user-info { padding: 4px 10px; margin-bottom: 4px; }
-#user-email { font-size: 0.75rem; color: var(--muted); display: block; }
-.btn-logout {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 12px; border-radius: 8px; background: none;
-  border: none; color: var(--muted); font-size: 0.85rem;
-  cursor: pointer; font-family: var(--font); transition: all 0.15s;
-}
-.btn-logout:hover { color: var(--red); background: rgba(248,81,73,0.08); }
+/* Mobile */
+.mobile-header{display:none;position:fixed;top:0;left:0;right:0;background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;z-index:200;align-items:center;justify-content:space-between}
+.mobile-logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:.95rem}
+.mobile-logo-icon{width:30px;height:30px;background:var(--accent);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px}
+.btn-hamburger{background:none;border:none;color:var(--text);font-size:22px;cursor:pointer;padding:2px 6px}
+.mobile-menu{display:none;position:fixed;top:53px;left:0;right:0;background:var(--surface);border-bottom:1px solid var(--border);padding:10px;z-index:150}
+.mobile-menu.open{display:block}
 
-/* ── Mobile header ── */
-.mobile-header {
-  display: none; position: fixed; top: 0; left: 0; right: 0;
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 12px 16px; z-index: 200;
-  align-items: center; justify-content: space-between;
-}
-.mobile-logo { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.95rem; }
-.mobile-logo-icon { width: 30px; height: 30px; background: var(--accent); border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
-.btn-hamburger { background: none; border: none; color: var(--text); font-size: 22px; cursor: pointer; }
-.mobile-menu {
-  display: none; position: fixed; top: 53px; left: 0; right: 0;
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 10px; z-index: 150;
-}
-.mobile-menu.open { display: block; }
-.mobile-menu [data-nav] { display: flex; }
+/* Main */
+.main{margin-left:220px;padding:32px}
+.page-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.page-header h2{font-size:1.3rem;font-weight:600}
+.page-header p{font-size:.78rem;color:var(--muted);margin-top:2px}
 
-/* ── Main content ── */
-.main { margin-left: 220px; padding: 28px 32px; min-height: 100vh; }
-.page-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
-}
-.page-header h2 { font-size: 1.3rem; font-weight: 600; }
-.page-header p { font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+/* KPI */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:24px}
+.kpi-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;position:relative;overflow:hidden}
+.kpi-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.kpi-card.amber::before{background:var(--accent)}
+.kpi-card.green::before{background:var(--green)}
+.kpi-card.blue::before{background:var(--blue)}
+.kpi-label{font-size:.72rem;color:var(--muted);margin-bottom:5px}
+.kpi-val{font-size:1.5rem;font-weight:600;color:var(--text)}
+.kpi-val.gv{color:var(--green)}
+.kpi-val.bv{color:var(--blue)}
+.kpi-val.rv{color:var(--red)}
+.kpi-sub{font-size:.7rem;color:var(--muted);margin-top:4px}
 
-/* ── KPI grid ── */
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 24px; }
-.kpi-card {
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px 18px;
-  position: relative; overflow: hidden;
-}
-.kpi-card::before {
-  content: ''; position: absolute; top: 0; left: 0;
-  right: 0; height: 2px;
-}
-.kpi-card.amber::before { background: var(--accent); }
-.kpi-card.green::before { background: var(--green); }
-.kpi-card.blue::before { background: var(--blue); }
-.kpi-label { font-size: 0.75rem; color: var(--muted); margin-bottom: 6px; }
-.kpi-val { font-size: 1.5rem; font-weight: 600; color: var(--text); }
-.kpi-val.profit { color: var(--green); }
-.kpi-val.loss { color: var(--red); }
-.kpi-sub { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+/* Table card */
+.table-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.table-card-header{padding:14px 18px;border-bottom:1px solid var(--border);font-size:.86rem;font-weight:500;display:flex;align-items:center;gap:8px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:.7rem;color:var(--muted);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid rgba(42,53,71,.5);font-size:.82rem;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,.02)}
+td strong{color:var(--text);font-weight:500}
+.sub{font-size:.7rem;color:var(--muted)}
+.mono{font-family:var(--mono);font-size:.76rem}
+.profit{color:var(--green);font-weight:500}
+.loss{color:var(--red);font-weight:500}
+.empty-row{text-align:center;color:var(--muted);padding:36px 0!important;font-size:.84rem}
 
-/* ── Table card ── */
-.table-card {
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: var(--radius); overflow: hidden;
-}
-.table-card-header {
-  padding: 14px 18px; border-bottom: 1px solid var(--border);
-  font-size: 0.88rem; font-weight: 500;
-  display: flex; align-items: center; gap: 8px;
-}
-.table-card-header span { color: var(--accent); }
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
-th {
-  text-align: left; font-size: 0.73rem; color: var(--muted);
-  font-weight: 500; padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-td { padding: 11px 14px; border-bottom: 1px solid rgba(42,53,71,0.5); font-size: 0.84rem; }
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: rgba(255,255,255,0.02); }
-td strong { color: var(--text); font-weight: 500; }
-.sub { font-size: 0.72rem; color: var(--muted); }
-.mono { font-family: var(--mono); font-size: 0.78rem; }
-.profit { color: var(--green); font-weight: 500; }
-.loss { color: var(--red); font-weight: 500; }
-.empty-row { text-align: center; color: var(--muted); padding: 32px 0 !important; }
+/* Badge */
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:.7rem;font-weight:500}
+.badge.avail{background:rgba(88,166,255,.1);color:var(--blue);border:1px solid rgba(88,166,255,.2)}
+.badge.sold{background:rgba(63,185,80,.1);color:var(--green);border:1px solid rgba(63,185,80,.2)}
 
-/* ── Badge ── */
-.badge {
-  display: inline-flex; align-items: center;
-  padding: 3px 9px; border-radius: 20px; font-size: 0.72rem; font-weight: 500;
-}
-.badge.avail { background: rgba(88,166,255,0.1); color: var(--blue); border: 1px solid rgba(88,166,255,0.2); }
-.badge.sold  { background: rgba(63,185,80,0.1); color: var(--green); border: 1px solid rgba(63,185,80,0.2); }
+/* Toolbar */
+.toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.search-input{flex:1;min-width:180px;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:9px 14px;font-size:.84rem;font-family:var(--font);transition:border-color .15s}
+.search-input:focus{outline:none;border-color:var(--accent)}
+.filter-select{background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:9px 12px;font-size:.84rem;font-family:var(--font);cursor:pointer}
+.btn-add{display:flex;align-items:center;gap:6px;background:var(--accent);color:#0d1117;border:none;border-radius:var(--radius);padding:9px 16px;font-size:.84rem;font-weight:600;cursor:pointer;font-family:var(--font);white-space:nowrap;transition:background .15s}
+.btn-add:hover{background:var(--accent2)}
 
-/* ── Toolbar ── */
-.toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-.search-input {
-  flex: 1; min-width: 180px; background: var(--card);
-  border: 1px solid var(--border); color: var(--text);
-  border-radius: var(--radius); padding: 9px 14px;
-  font-size: 0.85rem; font-family: var(--font);
-  transition: border-color 0.15s;
-}
-.search-input:focus { outline: none; border-color: var(--accent); }
-.filter-select {
-  background: var(--card); border: 1px solid var(--border);
-  color: var(--text); border-radius: var(--radius);
-  padding: 9px 12px; font-size: 0.85rem; font-family: var(--font); cursor: pointer;
-}
-.btn-add {
-  display: flex; align-items: center; gap: 6px;
-  background: var(--accent); color: #0d1117;
-  border: none; border-radius: var(--radius);
-  padding: 9px 16px; font-size: 0.85rem; font-weight: 600;
-  cursor: pointer; font-family: var(--font); white-space: nowrap;
-  transition: background 0.15s;
-}
-.btn-add:hover { background: var(--accent2); }
+/* Action buttons */
+.actions{display:flex;gap:4px}
+.act-btn{width:28px;height:28px;border-radius:7px;border:1px solid var(--border);background:var(--surface);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;transition:all .15s;line-height:1}
+.act-btn:hover{transform:scale(1.1)}
+.act-btn.sell{background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+.act-btn.edit{background:rgba(240,180,41,.1);border-color:rgba(240,180,41,.3)}
+.act-btn.del{background:rgba(248,81,73,.08);border-color:rgba(248,81,73,.2)}
 
-/* ── Action buttons ── */
-.actions { display: flex; gap: 4px; }
-.act-btn {
-  width: 28px; height: 28px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--surface);
-  cursor: pointer; display: flex; align-items: center;
-  justify-content: center; font-size: 13px;
-  transition: all 0.15s;
-}
-.act-btn:hover { transform: scale(1.1); }
-.act-btn.sell { background: rgba(63,185,80,0.1); border-color: rgba(63,185,80,0.3); }
-.act-btn.edit { background: rgba(240,180,41,0.1); border-color: rgba(240,180,41,0.3); }
-.act-btn.del  { background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.2); }
+/* Modal */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(4px);z-index:500;align-items:center;justify-content:center;padding:1rem}
+.modal-open{display:flex!important}
+.modal-box{background:var(--surface);border:1px solid var(--border);border-radius:14px;width:100%;max-height:90vh;overflow-y:auto}
+.modal-box.wide{max-width:560px}
+.modal-box.narrow{max-width:430px}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);z-index:1}
+.modal-head h3{font-size:.94rem;font-weight:500}
+.btn-close{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1;padding:0 2px;transition:color .15s}
+.btn-close:hover{color:var(--text)}
+.modal-body{padding:22px}
+.form-row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.fgroup{margin-bottom:12px}
+.fgroup label{display:block;font-size:.74rem;color:var(--muted);margin-bottom:5px}
+.fgroup input,.fgroup textarea,.fgroup select{width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-size:.84rem;font-family:var(--font);transition:border-color .15s}
+.fgroup input:focus,.fgroup textarea:focus{outline:none;border-color:var(--accent)}
+.fgroup textarea{resize:vertical;min-height:66px}
+.modal-footer{display:flex;gap:10px;margin-top:18px}
+.btn-cancel{flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);background:none;color:var(--muted);font-size:.84rem;cursor:pointer;font-family:var(--font);transition:all .15s}
+.btn-cancel:hover{color:var(--text);background:var(--card)}
+.btn-confirm{flex:1;padding:10px;border-radius:8px;border:none;background:var(--accent);color:#0d1117;font-size:.84rem;font-weight:600;cursor:pointer;font-family:var(--font);transition:background .15s}
+.btn-confirm:hover{background:var(--accent2)}
+.btn-confirm.green{background:#2ea043;color:#fff}
+.btn-confirm.green:hover{background:var(--green)}
+.btn-confirm:disabled,.btn-add:disabled{opacity:.6;cursor:not-allowed}
+.vehicle-info-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:.84rem}
+.lucro-preview{border-radius:8px;padding:9px 14px;font-size:.84rem;font-weight:500;margin-top:2px}
+.lucro-preview.positive{background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);color:var(--green)}
+.lucro-preview.negative{background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.2);color:var(--red)}
+.alert-box{border-radius:8px;padding:10px 14px;font-size:.82rem;margin-bottom:14px}
+.alert-box.error{background:#2a1515;border:1px solid #5a2020;color:var(--red)}
+.alert-box.success{background:#0d2818;border:1px solid #1a5c32;color:var(--green)}
 
-/* ── Modal ── */
-.modal-overlay {
-  display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.65); backdrop-filter: blur(4px);
-  z-index: 500; align-items: center; justify-content: center;
-  padding: 1rem;
-}
-.modal-overlay { display: none; }
-.modal-overlay[style*=""] { display: flex; }
-.modal-box {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 14px; width: 100%; max-height: 90vh;
-  overflow-y: auto;
-}
-.modal-box.wide { max-width: 560px; }
-.modal-box.narrow { max-width: 420px; }
-.modal-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 20px; border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; background: var(--surface); z-index: 1;
-}
-.modal-head h3 { font-size: 0.95rem; font-weight: 500; }
-.btn-close {
-  background: none; border: none; color: var(--muted);
-  font-size: 20px; cursor: pointer; line-height: 1;
-  transition: color 0.15s;
-}
-.btn-close:hover { color: var(--text); }
-.modal-body { padding: 20px; }
-.form-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.form-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-.fgroup { margin-bottom: 12px; }
-.fgroup label { display: block; font-size: 0.76rem; color: var(--muted); margin-bottom: 5px; }
-.fgroup input, .fgroup textarea {
-  width: 100%; background: var(--card); border: 1px solid var(--border);
-  color: var(--text); border-radius: 8px; padding: 9px 12px;
-  font-size: 0.85rem; font-family: var(--font); transition: border-color 0.15s;
-}
-.fgroup input:focus, .fgroup textarea:focus { outline: none; border-color: var(--accent); }
-.fgroup textarea { resize: vertical; min-height: 64px; }
-.modal-footer { display: flex; gap: 10px; margin-top: 16px; }
-.btn-cancel {
-  flex: 1; padding: 10px; border-radius: 8px;
-  border: 1px solid var(--border); background: none;
-  color: var(--muted); font-size: 0.86rem; cursor: pointer;
-  font-family: var(--font); transition: all 0.15s;
-}
-.btn-cancel:hover { color: var(--text); background: var(--card); }
-.btn-confirm {
-  flex: 1; padding: 10px; border-radius: 8px; border: none;
-  background: var(--accent); color: #0d1117;
-  font-size: 0.86rem; font-weight: 600; cursor: pointer;
-  font-family: var(--font); transition: background 0.15s;
-}
-.btn-confirm:hover { background: var(--accent2); }
-.btn-confirm.green-btn { background: #2ea043; color: #fff; }
-.btn-confirm.green-btn:hover { background: #3fb950; }
-.btn-confirm:disabled { opacity: 0.6; cursor: not-allowed; }
-.vehicle-info-box {
-  background: var(--card); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
-  font-size: 0.84rem;
-}
-.lucro-preview {
-  border-radius: 8px; padding: 9px 14px;
-  font-size: 0.84rem; font-weight: 500; margin-top: 4px;
-}
-.lucro-preview.positive { background: rgba(63,185,80,0.1); border: 1px solid rgba(63,185,80,0.25); color: var(--green); }
-.lucro-preview.negative { background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.2); color: var(--red); }
+/* Scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#3d5068}
 
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-/* ── Responsive ── */
-@media (max-width: 768px) {
-  .sidebar { display: none; }
-  .mobile-header { display: flex; }
-  .main { margin-left: 0; padding: 76px 16px 24px; }
-  .kpi-grid { grid-template-columns: 1fr 1fr; }
-  .form-row2, .form-row3 { grid-template-columns: 1fr; }
-  table { font-size: 0.78rem; }
-  th, td { padding: 8px 10px; }
+/* Responsive */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .mobile-header{display:flex}
+  .main{margin-left:0;padding:72px 16px 24px}
+  .kpi-grid{grid-template-columns:1fr 1fr}
+  .form-row2,.form-row3{grid-template-columns:1fr}
+  table{font-size:.76rem}
+  th,td{padding:8px 10px}
+  .page-header{flex-direction:column;align-items:flex-start}
 }
-@media (max-width: 400px) {
-  .kpi-grid { grid-template-columns: 1fr; }
-}
+@media(max-width:420px){.kpi-grid{grid-template-columns:1fr}}
+input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.4)}
 </style>
 </head>
 <body>
 
 <div id="loading-bar"></div>
 
-<!-- ── LOGIN ── -->
+<!-- ════════════════════════════════════════════
+     TELA DE LOGIN
+════════════════════════════════════════════ -->
 <div id="screen-login">
   <div class="login-box">
     <div class="login-logo">
@@ -707,23 +190,25 @@ td strong { color: var(--text); font-weight: 500; }
       </div>
     </div>
     <h2>Entrar na plataforma</h2>
+    <div id="login-error" class="login-error"></div>
     <div class="field">
       <label>E-mail</label>
-      <input type="email" id="input-email" placeholder="seu@email.com"/>
+      <input type="email" id="input-email" placeholder="seu@email.com" autocomplete="email"/>
     </div>
     <div class="field">
       <label>Senha</label>
-      <input type="password" id="input-pass" placeholder="••••••••"/>
+      <input type="password" id="input-pass" placeholder="••••••••" autocomplete="current-password"/>
     </div>
-    <div id="login-error" class="login-error">E-mail ou senha inválidos. Tente novamente.</div>
     <button class="btn-primary" id="btn-login">Entrar</button>
   </div>
 </div>
 
-<!-- ── APP ── -->
+<!-- ════════════════════════════════════════════
+     TELA DO APP
+════════════════════════════════════════════ -->
 <div id="screen-app">
 
-  <!-- Mobile header -->
+  <!-- Cabeçalho mobile -->
   <div class="mobile-header">
     <div class="mobile-logo">
       <div class="mobile-logo-icon">🚗</div>
@@ -731,12 +216,14 @@ td strong { color: var(--text); font-weight: 500; }
     </div>
     <button class="btn-hamburger" id="btn-hamburger">☰</button>
   </div>
+
+  <!-- Menu mobile -->
   <div id="mobile-menu" class="mobile-menu">
-    <div data-nav="dashboard" class="active"><span class="nav-icon">📊</span> Dashboard</div>
-    <div data-nav="inventario"><span class="nav-icon">🚗</span> Inventário</div>
-    <div data-nav="vendas"><span class="nav-icon">💰</span> Vendas</div>
+    <div class="nav-item active" data-nav="dashboard">📊 Dashboard</div>
+    <div class="nav-item" data-nav="inventario">🚗 Inventário</div>
+    <div class="nav-item" data-nav="vendas">💰 Vendas</div>
     <hr style="border-color:var(--border);margin:8px 0"/>
-    <button class="btn-logout" id="btn-logout-mobile" onclick="document.getElementById('btn-logout').click()">🚪 Sair</button>
+    <button class="btn-logout" onclick="doLogout()">🚪 Sair</button>
   </div>
 
   <!-- Sidebar -->
@@ -746,20 +233,20 @@ td strong { color: var(--text); font-weight: 500; }
       <span class="sidebar-logo-text">AutoGest</span>
     </div>
     <nav>
-      <div data-nav="dashboard" class="active"><span class="nav-icon">📊</span> Dashboard</div>
-      <div data-nav="inventario"><span class="nav-icon">🚗</span> Inventário</div>
-      <div data-nav="vendas"><span class="nav-icon">💰</span> Vendas</div>
+      <div class="nav-item active" data-nav="dashboard">📊 Dashboard</div>
+      <div class="nav-item" data-nav="inventario">🚗 Inventário</div>
+      <div class="nav-item" data-nav="vendas">💰 Vendas</div>
     </nav>
     <div class="sidebar-footer">
-      <div class="user-info"><span id="user-email"></span></div>
-      <button class="btn-logout" id="btn-logout">🚪 Sair</button>
+      <span id="user-email"></span>
+      <button class="btn-logout" onclick="doLogout()">🚪 Sair da conta</button>
     </div>
   </div>
 
-  <!-- Main -->
+  <!-- Conteúdo principal -->
   <div class="main">
 
-    <!-- DASHBOARD -->
+    <!-- ── DASHBOARD ── -->
     <div id="page-dashboard">
       <div class="page-header">
         <div><h2>Dashboard</h2><p>Visão geral do seu negócio</p></div>
@@ -767,7 +254,7 @@ td strong { color: var(--text); font-weight: 500; }
       <div class="kpi-grid">
         <div class="kpi-card green">
           <div class="kpi-label">Lucro Total</div>
-          <div class="kpi-val profit" id="kpi-lucro">—</div>
+          <div class="kpi-val gv" id="kpi-lucro">—</div>
           <div class="kpi-sub">nas vendas realizadas</div>
         </div>
         <div class="kpi-card amber">
@@ -776,20 +263,22 @@ td strong { color: var(--text); font-weight: 500; }
         </div>
         <div class="kpi-card blue">
           <div class="kpi-label">Disponíveis</div>
-          <div class="kpi-val" id="kpi-disp">—</div>
-          <div class="kpi-sub" id="kpi-investido">Capital: —</div>
+          <div class="kpi-val bv" id="kpi-disp">—</div>
+          <div class="kpi-sub" id="kpi-capital">Capital em estoque: —</div>
         </div>
         <div class="kpi-card green">
           <div class="kpi-label">Vendidos</div>
-          <div class="kpi-val" id="kpi-vendidos">—</div>
+          <div class="kpi-val gv" id="kpi-vendidos">—</div>
         </div>
       </div>
       <div class="table-card">
-        <div class="table-card-header"><span>💰</span> Últimas Vendas</div>
+        <div class="table-card-header">💰 Últimas Vendas</div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Veículo</th><th>Comprador</th><th>Valor Venda</th><th>Lucro</th><th>Data</th></tr></thead>
-            <tbody id="dash-sales-body">
+            <thead>
+              <tr><th>Veículo</th><th>Comprador</th><th>Valor Venda</th><th>Lucro</th><th>Data</th></tr>
+            </thead>
+            <tbody id="dash-tbody">
               <tr><td colspan="5" class="empty-row">Carregando...</td></tr>
             </tbody>
           </table>
@@ -797,16 +286,16 @@ td strong { color: var(--text); font-weight: 500; }
       </div>
     </div>
 
-    <!-- INVENTÁRIO -->
+    <!-- ── INVENTÁRIO ── -->
     <div id="page-inventario" style="display:none">
       <div class="page-header">
-        <div><h2>Inventário</h2><p>Gerencie seus veículos</p></div>
+        <div><h2>Inventário</h2><p id="inv-count">0 veículos cadastrados</p></div>
         <button class="btn-add" id="btn-new-vehicle">＋ Novo Veículo</button>
       </div>
       <div class="toolbar">
-        <input type="text" class="search-input" id="inv-search" placeholder="🔍  Buscar por marca, modelo, placa..."/>
+        <input type="text" class="search-input" id="inv-search" placeholder="🔍  Buscar por marca, modelo, placa ou cor..."/>
         <select class="filter-select" id="inv-filter">
-          <option value="todos">Todos</option>
+          <option value="todos">Todos os status</option>
           <option value="disponivel">Disponíveis</option>
           <option value="vendido">Vendidos</option>
         </select>
@@ -814,8 +303,10 @@ td strong { color: var(--text); font-weight: 500; }
       <div class="table-card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Veículo</th><th>Placa / Cor</th><th>KM</th><th>Compra</th><th>FIPE</th><th>Status</th><th>Ações</th></tr></thead>
-            <tbody id="inv-body">
+            <thead>
+              <tr><th>Veículo</th><th>Placa / Cor</th><th>Quilometragem</th><th>Compra</th><th>FIPE</th><th>Status</th><th>Ações</th></tr>
+            </thead>
+            <tbody id="inv-tbody">
               <tr><td colspan="7" class="empty-row">Carregando...</td></tr>
             </tbody>
           </table>
@@ -823,12 +314,12 @@ td strong { color: var(--text); font-weight: 500; }
       </div>
     </div>
 
-    <!-- VENDAS -->
+    <!-- ── VENDAS ── -->
     <div id="page-vendas" style="display:none">
       <div class="page-header">
-        <div><h2>Vendas</h2><p>Histórico e resultados financeiros</p></div>
+        <div><h2>Vendas</h2><p id="vendas-count">0 venda(s) realizada(s)</p></div>
       </div>
-      <div class="kpi-grid" style="grid-template-columns: repeat(3,1fr)">
+      <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr)">
         <div class="kpi-card">
           <div class="kpi-label">Total Investido</div>
           <div class="kpi-val" id="v-investido">—</div>
@@ -839,14 +330,16 @@ td strong { color: var(--text); font-weight: 500; }
         </div>
         <div class="kpi-card green">
           <div class="kpi-label">Lucro Total</div>
-          <div class="kpi-val profit" id="v-lucro">—</div>
+          <div class="kpi-val" id="v-lucro">—</div>
         </div>
       </div>
       <div class="table-card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Veículo</th><th>Comprador</th><th>CPF</th><th>Compra</th><th>Venda</th><th>Lucro</th><th>Data</th></tr></thead>
-            <tbody id="vendas-body">
+            <thead>
+              <tr><th>Veículo</th><th>Comprador</th><th>CPF</th><th>Compra</th><th>Venda</th><th>Lucro</th><th>Data</th></tr>
+            </thead>
+            <tbody id="vendas-tbody">
               <tr><td colspan="7" class="empty-row">Carregando...</td></tr>
             </tbody>
           </table>
@@ -857,72 +350,475 @@ td strong { color: var(--text); font-weight: 500; }
   </div><!-- /main -->
 </div><!-- /screen-app -->
 
-<!-- ── MODAL: Novo / Editar Veículo ── -->
+<!-- ════════════════════════════════════════════
+     MODAL: Novo / Editar Veículo
+════════════════════════════════════════════ -->
 <div class="modal-overlay" id="modal-vehicle">
   <div class="modal-box wide">
     <div class="modal-head">
       <h3 id="vmodal-title">Novo Veículo</h3>
-      <button class="btn-close" id="btn-close-vehicle">×</button>
+      <button class="btn-close" onclick="closeModal('vehicle')">×</button>
     </div>
     <div class="modal-body">
-      <form id="vform">
-        <div class="form-row2">
-          <div class="fgroup"><label>Marca *</label><input id="vf-marca" required placeholder="Toyota"/></div>
-          <div class="fgroup"><label>Modelo *</label><input id="vf-modelo" required placeholder="Corolla"/></div>
-        </div>
-        <div class="form-row3">
-          <div class="fgroup"><label>Ano *</label><input id="vf-ano" type="number" required min="1900" max="2099" placeholder="2023"/></div>
-          <div class="fgroup"><label>Placa *</label><input id="vf-placa" required placeholder="ABC-1234"/></div>
-          <div class="fgroup"><label>Cor *</label><input id="vf-cor" required placeholder="Prata"/></div>
-        </div>
-        <div class="fgroup"><label>Quilometragem (km) *</label><input id="vf-km" type="number" required min="0" placeholder="0"/></div>
-        <div class="form-row2">
-          <div class="fgroup"><label>Valor FIPE (R$) *</label><input id="vf-fipe" type="number" required min="0" step="0.01" placeholder="0,00"/></div>
-          <div class="fgroup"><label>Valor de Compra (R$) *</label><input id="vf-compra" type="number" required min="0" step="0.01" placeholder="0,00"/></div>
-        </div>
-        <div class="fgroup"><label>Observações</label><textarea id="vf-obs" placeholder="Condições, acessórios, revisões..."></textarea></div>
-        <div class="modal-footer">
-          <button type="button" class="btn-cancel" id="btn-cancel-vehicle">Cancelar</button>
-          <button type="submit" class="btn-confirm" id="vform-submit">Salvar Veículo</button>
-        </div>
-      </form>
+      <div id="vform-alert" class="alert-box error" style="display:none"></div>
+      <div class="form-row2">
+        <div class="fgroup"><label>Marca *</label><input id="vf-marca" placeholder="Toyota"/></div>
+        <div class="fgroup"><label>Modelo *</label><input id="vf-modelo" placeholder="Corolla"/></div>
+      </div>
+      <div class="form-row3">
+        <div class="fgroup"><label>Ano *</label><input id="vf-ano" type="number" min="1900" max="2099" placeholder="2023"/></div>
+        <div class="fgroup"><label>Placa *</label><input id="vf-placa" placeholder="ABC-1234"/></div>
+        <div class="fgroup"><label>Cor *</label><input id="vf-cor" placeholder="Prata"/></div>
+      </div>
+      <div class="fgroup"><label>Quilometragem (km) *</label><input id="vf-km" type="number" min="0" placeholder="0"/></div>
+      <div class="form-row2">
+        <div class="fgroup"><label>Valor FIPE (R$) *</label><input id="vf-fipe" type="number" min="0" step="0.01" placeholder="0,00"/></div>
+        <div class="fgroup"><label>Valor de Compra (R$) *</label><input id="vf-compra" type="number" min="0" step="0.01" placeholder="0,00"/></div>
+      </div>
+      <div class="fgroup"><label>Observações</label><textarea id="vf-obs" placeholder="Condições gerais, acessórios, revisões em dia..."></textarea></div>
+      <div class="modal-footer">
+        <button class="btn-cancel" onclick="closeModal('vehicle')">Cancelar</button>
+        <button class="btn-confirm" id="vform-submit" onclick="submitVehicle()">Salvar Veículo</button>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ── MODAL: Registrar Venda ── -->
+<!-- ════════════════════════════════════════════
+     MODAL: Registrar Venda
+════════════════════════════════════════════ -->
 <div class="modal-overlay" id="modal-sale">
   <div class="modal-box narrow">
     <div class="modal-head">
       <h3>💰 Registrar Venda</h3>
-      <button class="btn-close" id="btn-close-sale">×</button>
+      <button class="btn-close" onclick="closeModal('sale')">×</button>
     </div>
     <div class="modal-body">
       <div class="vehicle-info-box" id="smodal-info"></div>
-      <form id="sform">
-        <div class="fgroup"><label>Nome do Comprador *</label><input id="sf-nome" required placeholder="João da Silva"/></div>
-        <div class="fgroup"><label>CPF do Comprador *</label><input id="sf-cpf" required placeholder="000.000.000-00"/></div>
-        <div class="form-row2">
-          <div class="fgroup"><label>Valor de Venda (R$) *</label><input id="sf-valor" type="number" required min="0" step="0.01"/></div>
-          <div class="fgroup"><label>Data da Venda *</label><input id="sf-data" type="date" required/></div>
-        </div>
-        <div id="lucro-preview" class="lucro-preview positive">Lucro estimado: —</div>
-        <div class="modal-footer">
-          <button type="button" class="btn-cancel" id="btn-cancel-sale">Cancelar</button>
-          <button type="submit" class="btn-confirm green-btn" id="sform-submit">Confirmar Venda</button>
-        </div>
-      </form>
+      <div id="sform-alert" class="alert-box error" style="display:none"></div>
+      <div class="fgroup"><label>Nome do Comprador *</label><input id="sf-nome" placeholder="João da Silva"/></div>
+      <div class="fgroup"><label>CPF do Comprador *</label><input id="sf-cpf" placeholder="000.000.000-00"/></div>
+      <div class="form-row2">
+        <div class="fgroup"><label>Valor de Venda (R$) *</label><input id="sf-valor" type="number" min="0" step="0.01" oninput="updateLucroPreview()"/></div>
+        <div class="fgroup"><label>Data da Venda *</label><input id="sf-data" type="date"/></div>
+      </div>
+      <div id="lucro-preview" class="lucro-preview positive">Lucro estimado: —</div>
+      <div class="modal-footer">
+        <button class="btn-cancel" onclick="closeModal('sale')">Cancelar</button>
+        <button class="btn-confirm green" id="sform-submit" onclick="submitSale()">Confirmar Venda</button>
+      </div>
     </div>
   </div>
 </div>
 
-<script>
-// Cancelar botões
-document.getElementById('btn-cancel-vehicle').addEventListener('click',()=>{ document.getElementById('modal-vehicle').style.display=''; });
-document.getElementById('btn-cancel-sale').addEventListener('click',()=>{ document.getElementById('modal-sale').style.display=''; });
-// Enter no login
-document.getElementById('input-pass').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('btn-login').click(); });
-</script>
+<!-- ════════════════════════════════════════════
+     FIREBASE + LÓGICA DO APP
+════════════════════════════════════════════ -->
+<script type="module">
+import { initializeApp }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc,
+  doc, getDocs, query, orderBy }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
+// ╔══════════════════════════════════════════════╗
+// ║  🔧 COLE AQUI SUAS CREDENCIAIS DO FIREBASE  ║
+// ╚══════════════════════════════════════════════╝
+const firebaseConfig = {
+  apiKey: "AIzaSyCSPMc1qTqIfmwd0bZjOfyjwvh49_9xxHc",
+  authDomain: "garagemgh.firebaseapp.com",
+  projectId: "garagemgh",
+  storageBucket: "garagemgh.firebasestorage.app",
+  messagingSenderId: "647982487018",
+  appId: "1:647982487018:web:ae173e09e8e648f6354e93"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// ── Utilitários ─────────────────────────────────
+const fmt    = v => new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(v||0);
+const fmtKm  = v => new Intl.NumberFormat('pt-BR').format(v||0)+' km';
+const fmtDt  = s => s ? new Date(s+'T12:00:00').toLocaleDateString('pt-BR') : '—';
+const el     = id => document.getElementById(id);
+const show   = id => el(id).style.display = '';
+const hide   = id => el(id).style.display = 'none';
+const setTxt = (id,v) => el(id).textContent = v;
+
+// ── Estado global ────────────────────────────────
+let vehicles   = [];
+let editingId  = null;
+let sellingId  = null;
+let currentPage = 'dashboard';
+
+// ════════════════════════════════════════════════
+// AUTH
+// ════════════════════════════════════════════════
+onAuthStateChanged(auth, user => {
+  if (user) {
+    hide('screen-login');
+    show('screen-app');
+    setTxt('user-email', user.email);
+    loadVehicles();
+  } else {
+    show('screen-login');
+    hide('screen-app');
+    el('btn-login').textContent = 'Entrar';
+  }
+});
+
+el('btn-login').addEventListener('click', async () => {
+  const email = el('input-email').value.trim();
+  const pass  = el('input-pass').value;
+  const errEl = el('login-error');
+  errEl.style.display = 'none';
+  if (!email || !pass) {
+    errEl.textContent = 'Preencha e-mail e senha.';
+    errEl.style.display = 'block';
+    return;
+  }
+  el('btn-login').textContent = 'Entrando...';
+  el('btn-login').disabled = true;
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+  } catch (e) {
+    errEl.textContent = 'E-mail ou senha inválidos. Tente novamente.';
+    errEl.style.display = 'block';
+    el('btn-login').textContent = 'Entrar';
+    el('btn-login').disabled = false;
+  }
+});
+
+el('input-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') el('btn-login').click();
+});
+
+window.doLogout = () => signOut(auth);
+
+// ════════════════════════════════════════════════
+// NAVEGAÇÃO
+// ════════════════════════════════════════════════
+document.querySelectorAll('[data-nav]').forEach(navEl => {
+  navEl.addEventListener('click', () => {
+    currentPage = navEl.dataset.nav;
+    document.querySelectorAll('[data-nav]').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('[data-nav="'+currentPage+'"]').forEach(n => n.classList.add('active'));
+    ['dashboard','inventario','vendas'].forEach(p => {
+      el('page-'+p).style.display = p === currentPage ? '' : 'none';
+    });
+    el('mobile-menu').classList.remove('open');
+    renderPage(currentPage);
+  });
+});
+
+el('btn-hamburger').addEventListener('click', () => {
+  el('mobile-menu').classList.toggle('open');
+});
+
+// ════════════════════════════════════════════════
+// FIRESTORE
+// ════════════════════════════════════════════════
+function loadingBar(pct) {
+  el('loading-bar').style.width = pct+'%';
+  if (pct === 100) setTimeout(() => el('loading-bar').style.width = '0', 400);
+}
+
+async function loadVehicles() {
+  loadingBar(60);
+  try {
+    const q    = query(collection(db,'vehicles'), orderBy('criadoEm','desc'));
+    const snap = await getDocs(q);
+    vehicles   = snap.docs.map(d => ({id:d.id,...d.data()}));
+    renderPage(currentPage);
+  } catch(e) {
+    console.error('Erro ao carregar:', e);
+  }
+  loadingBar(100);
+}
+
+async function dbAdd(data) {
+  await addDoc(collection(db,'vehicles'), {
+    ...data, status:'disponivel', criadoEm: new Date().toISOString()
+  });
+}
+
+async function dbUpdate(id, data) {
+  await updateDoc(doc(db,'vehicles',id), data);
+}
+
+async function dbDelete(id) {
+  await deleteDoc(doc(db,'vehicles',id));
+}
+
+// ════════════════════════════════════════════════
+// RENDER
+// ════════════════════════════════════════════════
+function renderPage(page) {
+  if (page === 'dashboard')  renderDashboard();
+  if (page === 'inventario') renderInventario();
+  if (page === 'vendas')     renderVendas();
+}
+
+// ── Dashboard ────────────────────────────────────
+function renderDashboard() {
+  const vendidos    = vehicles.filter(v => v.status === 'vendido');
+  const disponiveis = vehicles.filter(v => v.status === 'disponivel');
+  const lucro  = vendidos.reduce((a,v) => a + ((v.venda?.valorVenda||0) - v.valorCompra), 0);
+  const capital = disponiveis.reduce((a,v) => a + v.valorCompra, 0);
+
+  setTxt('kpi-lucro',    fmt(lucro));
+  setTxt('kpi-total',    vehicles.length);
+  setTxt('kpi-disp',     disponiveis.length);
+  setTxt('kpi-vendidos', vendidos.length);
+  setTxt('kpi-capital',  'Capital em estoque: '+fmt(capital));
+
+  el('kpi-lucro').className = 'kpi-val ' + (lucro >= 0 ? 'gv' : 'rv');
+
+  const tbody = el('dash-tbody');
+  if (!vendidos.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-row">Nenhuma venda registrada ainda. Vá ao Inventário e marque um veículo como vendido.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = vendidos.slice(0,8).map(v => {
+    const lucroV = (v.venda?.valorVenda||0) - v.valorCompra;
+    return `<tr>
+      <td><strong>${esc(v.marca)} ${esc(v.modelo)}</strong><br><span class="sub">${v.ano} · ${esc(v.placa)}</span></td>
+      <td>${esc(v.venda?.nomeComprador||'—')}</td>
+      <td>${fmt(v.venda?.valorVenda)}</td>
+      <td class="${lucroV>=0?'profit':'loss'}">${lucroV>=0?'+':''}${fmt(lucroV)}</td>
+      <td>${fmtDt(v.venda?.dataVenda)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Inventário ───────────────────────────────────
+function renderInventario() {
+  setTxt('inv-count', vehicles.length + ' veículo(s) cadastrado(s)');
+  applyInventarioFilters();
+}
+
+function applyInventarioFilters() {
+  const search = (el('inv-search').value||'').toLowerCase();
+  const filter = el('inv-filter').value;
+  const filtered = vehicles.filter(v => {
+    const matchF = filter === 'todos' || v.status === filter;
+    const matchS = `${v.marca} ${v.modelo} ${v.placa} ${v.cor}`.toLowerCase().includes(search);
+    return matchF && matchS;
+  });
+  const tbody = el('inv-tbody');
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-row">'+(vehicles.length===0?'Nenhum veículo cadastrado. Clique em "+ Novo Veículo" para começar.':'Nenhum veículo encontrado para essa busca.')+'</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map(v => {
+    const isVendido = v.status === 'vendido';
+    const acts = isVendido
+      ? `<button class="act-btn del" title="Excluir" onclick="confirmDelete('${v.id}')">🗑</button>`
+      : `<button class="act-btn sell" title="Registrar Venda" onclick="openSaleModal('${v.id}')">💰</button>
+         <button class="act-btn edit" title="Editar" onclick="openEditModal('${v.id}')">✏️</button>
+         <button class="act-btn del" title="Excluir" onclick="confirmDelete('${v.id}')">🗑</button>`;
+    return `<tr>
+      <td><strong>${esc(v.marca)} ${esc(v.modelo)}</strong><br><span class="sub">${v.ano}</span></td>
+      <td>${esc(v.placa)}<br><span class="sub">${esc(v.cor)}</span></td>
+      <td>${fmtKm(v.quilometragem)}</td>
+      <td>${fmt(v.valorCompra)}</td>
+      <td>${fmt(v.valorFipe)}</td>
+      <td><span class="badge ${isVendido?'sold':'avail'}">${isVendido?'✓ Vendido':'● Disponível'}</span></td>
+      <td><div class="actions">${acts}</div></td>
+    </tr>`;
+  }).join('');
+}
+
+el('inv-search').addEventListener('input', applyInventarioFilters);
+el('inv-filter').addEventListener('change', applyInventarioFilters);
+
+// ── Vendas ────────────────────────────────────────
+function renderVendas() {
+  const vendidos = vehicles.filter(v => v.status === 'vendido');
+  setTxt('vendas-count', vendidos.length + ' venda(s) realizada(s)');
+  const lucro   = vendidos.reduce((a,v) => a + ((v.venda?.valorVenda||0) - v.valorCompra), 0);
+  const faturado = vendidos.reduce((a,v) => a + (v.venda?.valorVenda||0), 0);
+  const investido = vendidos.reduce((a,v) => a + v.valorCompra, 0);
+  setTxt('v-investido', fmt(investido));
+  setTxt('v-faturado',  fmt(faturado));
+  setTxt('v-lucro',     fmt(lucro));
+  el('v-lucro').className = 'kpi-val ' + (lucro >= 0 ? 'gv' : 'rv');
+
+  const tbody = el('vendas-tbody');
+  if (!vendidos.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-row">Nenhuma venda registrada ainda.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = vendidos.map(v => {
+    const lucroV = (v.venda?.valorVenda||0) - v.valorCompra;
+    return `<tr>
+      <td><strong>${esc(v.marca)} ${esc(v.modelo)}</strong><br><span class="sub">${v.ano} · ${esc(v.placa)}</span></td>
+      <td>${esc(v.venda?.nomeComprador||'—')}</td>
+      <td class="mono">${esc(v.venda?.cpfComprador||'—')}</td>
+      <td>${fmt(v.valorCompra)}</td>
+      <td>${fmt(v.venda?.valorVenda)}</td>
+      <td class="${lucroV>=0?'profit':'loss'}">${lucroV>=0?'+':''}${fmt(lucroV)}</td>
+      <td>${fmtDt(v.venda?.dataVenda)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════
+// MODAL VEÍCULO
+// ════════════════════════════════════════════════
+el('btn-new-vehicle').addEventListener('click', () => {
+  editingId = null;
+  setTxt('vmodal-title','Novo Veículo');
+  ['vf-marca','vf-modelo','vf-ano','vf-placa','vf-cor','vf-km','vf-fipe','vf-compra','vf-obs'].forEach(id => el(id).value='');
+  hide('vform-alert');
+  openModal('vehicle');
+});
+
+window.openEditModal = id => {
+  const v = vehicles.find(x => x.id === id);
+  if (!v) return;
+  editingId = id;
+  setTxt('vmodal-title','Editar Veículo');
+  el('vf-marca').value   = v.marca||'';
+  el('vf-modelo').value  = v.modelo||'';
+  el('vf-ano').value     = v.ano||'';
+  el('vf-placa').value   = v.placa||'';
+  el('vf-cor').value     = v.cor||'';
+  el('vf-km').value      = v.quilometragem||0;
+  el('vf-fipe').value    = v.valorFipe||0;
+  el('vf-compra').value  = v.valorCompra||0;
+  el('vf-obs').value     = v.observacoes||'';
+  hide('vform-alert');
+  openModal('vehicle');
+};
+
+window.submitVehicle = async () => {
+  const fields = { marca:'vf-marca', modelo:'vf-modelo', ano:'vf-ano', placa:'vf-placa', cor:'vf-cor', km:'vf-km', fipe:'vf-fipe', compra:'vf-compra' };
+  for (const [name, id] of Object.entries(fields)) {
+    if (!el(id).value.toString().trim()) {
+      showAlert('vform-alert','Preencha todos os campos obrigatórios (*).');
+      return;
+    }
+  }
+  const data = {
+    marca:          el('vf-marca').value.trim(),
+    modelo:         el('vf-modelo').value.trim(),
+    ano:            +el('vf-ano').value,
+    placa:          el('vf-placa').value.trim().toUpperCase(),
+    cor:            el('vf-cor').value.trim(),
+    quilometragem:  +el('vf-km').value,
+    valorFipe:      +el('vf-fipe').value,
+    valorCompra:    +el('vf-compra').value,
+    observacoes:    el('vf-obs').value.trim()
+  };
+  const btn = el('vform-submit');
+  btn.textContent = 'Salvando...'; btn.disabled = true;
+  try {
+    if (editingId) await dbUpdate(editingId, data);
+    else await dbAdd(data);
+    closeModal('vehicle');
+    await loadVehicles();
+  } catch(e) {
+    showAlert('vform-alert','Erro ao salvar: '+e.message);
+  }
+  btn.textContent = 'Salvar Veículo'; btn.disabled = false;
+};
+
+// ════════════════════════════════════════════════
+// MODAL VENDA
+// ════════════════════════════════════════════════
+window.openSaleModal = id => {
+  const v = vehicles.find(x => x.id === id);
+  if (!v) return;
+  sellingId = id;
+  el('smodal-info').innerHTML = `<strong>${esc(v.marca)} ${esc(v.modelo)} ${v.ano}</strong> · ${esc(v.placa)}<br>
+    <span style="color:var(--muted);font-size:.76rem">Cor: ${esc(v.cor)} &nbsp;|&nbsp; Compra: ${fmt(v.valorCompra)}</span>`;
+  el('sf-nome').value  = '';
+  el('sf-cpf').value   = '';
+  el('sf-valor').value = v.valorFipe || '';
+  el('sf-data').value  = new Date().toISOString().split('T')[0];
+  hide('sform-alert');
+  updateLucroPreview();
+  openModal('sale');
+};
+
+window.updateLucroPreview = () => {
+  const v = vehicles.find(x => x.id === sellingId);
+  if (!v) return;
+  const venda = +(el('sf-valor').value||0);
+  const lucro = venda - v.valorCompra;
+  const lp = el('lucro-preview');
+  lp.textContent = 'Lucro estimado: ' + (lucro>=0?'+':'') + fmt(lucro);
+  lp.className = 'lucro-preview ' + (lucro >= 0 ? 'positive' : 'negative');
+};
+
+window.submitSale = async () => {
+  const nome  = el('sf-nome').value.trim();
+  const cpf   = el('sf-cpf').value.trim();
+  const valor = +el('sf-valor').value;
+  const data  = el('sf-data').value;
+  if (!nome || !cpf || !valor || !data) {
+    showAlert('sform-alert','Preencha todos os campos da venda.');
+    return;
+  }
+  const btn = el('sform-submit');
+  btn.textContent = 'Salvando...'; btn.disabled = true;
+  try {
+    await dbUpdate(sellingId, {
+      status: 'vendido',
+      venda: { nomeComprador:nome, cpfComprador:cpf, valorVenda:valor, dataVenda:data }
+    });
+    closeModal('sale');
+    await loadVehicles();
+  } catch(e) {
+    showAlert('sform-alert','Erro ao registrar venda: '+e.message);
+  }
+  btn.textContent = 'Confirmar Venda'; btn.disabled = false;
+};
+
+// ════════════════════════════════════════════════
+// DELETE
+// ════════════════════════════════════════════════
+window.confirmDelete = async id => {
+  const v = vehicles.find(x => x.id === id);
+  if (!v) return;
+  if (!confirm(`Excluir "${v.marca} ${v.modelo} ${v.ano}"?\n\nEsta ação não pode ser desfeita.`)) return;
+  try {
+    await dbDelete(id);
+    await loadVehicles();
+  } catch(e) {
+    alert('Erro ao excluir: '+e.message);
+  }
+};
+
+// ════════════════════════════════════════════════
+// UTILITÁRIOS UI
+// ════════════════════════════════════════════════
+function openModal(name) {
+  el('modal-'+name).classList.add('modal-open');
+}
+window.closeModal = name => {
+  el('modal-'+name).classList.remove('modal-open');
+};
+function showAlert(id, msg) {
+  const a = el(id);
+  a.textContent = msg;
+  a.style.display = 'block';
+}
+function esc(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Fechar modal clicando fora
+['modal-vehicle','modal-sale'].forEach(id => {
+  el(id).addEventListener('click', e => {
+    if (e.target === el(id)) closeModal(id.replace('modal-',''));
+  });
+});
+
+</script>
 </body>
 </html>
